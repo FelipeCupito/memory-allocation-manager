@@ -1,126 +1,207 @@
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <errno.h>
-#include <stdlib.h>
+/* 
+**  Basado en: https://mgarciaisaia.github.io/tutorial-c/blog/2014/12/26/un-tutorial-rapido-para-implementar-y-debuggear-malloc/
+**  Implemtacion del codigo del like, solo se remplazo la llamada al sistema sbrk por la funcion syscall que simula su 
+**  funcionamiento sin llamar al sistema y ademas se agregaron funciones de debbuger       
+*/
+#include "MemMang.h"
 
-#define MEM_SIZE 1024
-#define BLOCK_SIZE 64 //entran 16 bloques
+//INFO_BLOCK_SIZE = 24 
+void *firstInfoBlock = NULL; 
 
-void *start = NULL;
-void *next = NULL;
+//solo visible para syscall
+#define HEAP_SIZE 10000  //10 Kb 
+void *startMemory = NULL;  
+void *currentMemoryLimit = NULL; 
 
-int MM_init(){
-    if((start = malloc(MEM_SIZE)) == NULL)
-        return -1;
-    next = start;
-    return 0;
+struct infoBlock{
+    size_t size; 
+    int free;
+    struct infoBlock *next;
+};
+typedef struct infoBlock *infoBlockPtr;
+
+//private:
+void *sysCall(size_t size);
+infoBlockPtr findFreeBlock(infoBlockPtr *last, size_t size);
+infoBlockPtr requestSpace(infoBlockPtr last, size_t size);
+infoBlockPtr getBlockPtr(void *ptr);
+
+/*----------------------------------------------------------------*/
+void *my_malloc(size_t size){
+    if (size <= 0)
+        return NULL;
+    
+    infoBlockPtr block; 
+    if (firstInfoBlock == NULL){ // primer llamado
+        block = requestSpace(NULL,size);
+        if(block == NULL)
+            return NULL;
+        firstInfoBlock = block;
+    }else{
+        infoBlockPtr last = firstInfoBlock;
+        block = findFreeBlock(&last, size);
+        if (block == NULL){ 
+            block = requestSpace(last, size);//agrego al final un nuevo bloque
+            if(block == NULL)
+                return NULL;
+        }else{ // se encontro un boque
+            block->free = 0;
+        }
+    }
+    return (block + 1); //la direccion justo despues de infoBlock
 }
 
-char* my_malloc(int num_of_Blocks){   
-    if ( (next+(BLOCK_SIZE*num_of_Blocks))-start <= MEM_SIZE ){
-        char *result = next;
-        next += BLOCK_SIZE * num_of_Blocks;
-        return result;
+/*----------------------------------------------------------------*/
+infoBlockPtr findFreeBlock(infoBlockPtr* last, size_t size){
+    infoBlockPtr current = firstInfoBlock;
+    while (current != NULL && !(current->free && current->size >= size)){
+        *last = current;
+        current = current->next;
     }
+    return current;
+}
+
+/*----------------------------------------------------------------*/
+//agregar un nuevo bloque al final de la lista
+infoBlockPtr requestSpace(infoBlockPtr last, size_t size){
+    infoBlockPtr block;
+    block = sysCall(0); //block = sbrk(0); 
+    void* check = sysCall(size + INFO_BLOCK_SIZE);
+    if(check == NULL) //no hay mas espacio en el heap
+        return NULL;
+
+    if (last != NULL){ // si last==NULL es el primer llamado
+        last->next = block;
+    }
+    block->size = size;
+    block->next = NULL;
+    block->free = 0;
+
+    return block;
+}
+
+/*----------------------------------------------------------------*/
+infoBlockPtr getBlockPtr(void *ptr) { //direcciond de 
+    return (infoBlockPtr)ptr - 1;
+}
+
+/*----------------------------------------------------------------*/
+void my_free(void *ptr){
+    if (!ptr)
+        return;
+    infoBlockPtr blockPtr = getBlockPtr(ptr);
+    blockPtr->free = 1;
+}
+
+/*--------------------------------debugger------------------------------------
+  (*) bloque->next - bloque = bloque->size + INFO_BLOCK_SIZE 
+  (*) currentMemoryLimit - firstInfoBlock = a la suma de todos los size + INFO_BLOCK_SIZE * cantidad de bloques
+  (*) firstInfoBlock = startMemory
+*/
+int checkMemory(void){
+    infoBlockPtr current = firstInfoBlock;
+    int blockIndex=0, cantFreeBlock = 0, numError = 0;
+    size_t totalSize = 0;
+    printf("----------------START----------------\n");
+    while (current != NULL){ 
+        if(current->next != NULL){
+            long diff = (long)current->next-(long)current;
+            if(diff != (current->size+INFO_BLOCK_SIZE)){
+                int notUsed = diff - (current->size + INFO_BLOCK_SIZE);
+                printf("(*) Entre los bloque %d y %d hay %d bytes no usados\n",blockIndex, blockIndex+1, notUsed);
+                numError++;
+            }
+        }
+        blockIndex++;
+        totalSize += current->size + INFO_BLOCK_SIZE;
+        current = current->next;
+    }
+    if(currentMemoryLimit - firstInfoBlock != totalSize){
+        printf("(*) currentMemoryLimit-firstInfoBlock = %ld  != %ld (sumatoria: bloque->size+INFO_BLOCK_SIZE)\n",(currentMemoryLimit - firstInfoBlock), totalSize);
+        numError++;
+    }
+    if(firstInfoBlock != startMemory){
+        printf("(*) firstInfoBlock: %p != startMemory: %p \n", firstInfoBlock, startMemory);
+        numError++;
+    }
+    printf("cantidad de Errores encontrados: %d\n", numError);
+    printf("cantidad de bloques: %d\n",blockIndex);
+    printf("cantidad de bloques libres: %d\n",cantFreeBlock);
+    printf("-----------------END-----------------\n");
+    return numError>0?-1:0;
+}
+
+void printMemoryBLock(void){
+    infoBlockPtr current = firstInfoBlock;
+    int numeberOfBlocks= 0;
+    int freeBlock = 0;
+     printf("----------------START----------------\n");
+    while (current != NULL){
+        printf("Block %d: %p\n",numeberOfBlocks, current);
+        printf("  |-> size: %ld\n",current->size);
+        printf("  |-> free: %s\n",(current->free == 0 ? "no" : "yes"));
+        printf("  |-> next: %p\n",current->next);
+        printf("\n");
+        if(current->free == 1)
+            freeBlock++;
+        current = current->next;
+        numeberOfBlocks++;
+    }
+    printf("\n");
+    printf("cantidad de bloques: %d\n",numeberOfBlocks);
+    printf("cantidad de bloques libres: %d\n",freeBlock);
+    printf("-----------------END-----------------\n");
+    return;
+}
+void printAllMemory(void){
+    int cantElemPerLine = 10; //<----- para cambiar la cantidad de elementos en una linea 
+    infoBlockPtr current = firstInfoBlock;
+    int numeberOfBlocks= 0;
+    int freeBlock = 0;
+    printf("----------------START----------------\n");
+    while (current != NULL){
+        printf("Block %d: %p\n",numeberOfBlocks, current);
+        printf("  |-> size: %ld\n",current->size);
+        printf("  |-> free: %s\n",(current->free == 0 ? "no" : "yes"));
+        printf("  |-> next: %p\n",current->next);
+        printf("  |-> datos guardados:");
+        char *aux = current+1; //NO CAMBIAR (char*)(current+1)
+        for (int i = 0; i < current->size; i++){
+            if(i%cantElemPerLine == 0){
+                printf("\n \t");
+            }
+            printf("%d ", *(aux+i));
+        }
+        printf("\n");
+        if(current->free == 1)
+            freeBlock++;
+        current = current->next;
+        numeberOfBlocks++;
+    }
+    printf("\n");
+    printf("cantidad de bloques: %d\n",numeberOfBlocks);
+    printf("cantidad de bloques libres: %d\n",freeBlock);
+    printf("-----------------END-----------------\n");
+    return;
+}
+
+/*------------------------------SYSCALL----------------------------------------*/
+//sbrk
+void *sysCall(size_t size){ 
+    if(startMemory == NULL){
+        startMemory = malloc(HEAP_SIZE);
+        if(startMemory == NULL){
+            printf("fallo syscall \n");
+            exit(0);
+        }
+        currentMemoryLimit = startMemory;
+        return currentMemoryLimit;
+    }
+    if((currentMemoryLimit-startMemory)+size <= HEAP_SIZE)
+        return currentMemoryLimit+=size;
+
     return NULL;
 }
-
-int num_of_free_blocks(void){
-    return  (MEM_SIZE - (next-start) )/ BLOCK_SIZE;
-}
-
-int num_of_blocks_used(void){
-    return (next-start) / BLOCK_SIZE;
-}
-
-//-------------------------------TEST---------------------------------------
-int main(int argc, char const *argv[]){
-
-    if(MM_init() == -1 ){
-        printf("Error al MM_init");
-        return -1;
-    }
-    /*
-    //verificacion de un bloque (cambiar MEM_SIZE 64)
-    char* aux = my_malloc(1);
-    char *aux2 = my_malloc(1);
-
-    printf("valor del puntero: %p  \n", aux);
-    printf("se espera valor NULL: %p  \n", aux2);
-
-    printf("numero de bloques libres: %d \n", num_of_free_blocks());
-    printf("numero de bloques usados: %d \n", num_of_blocks_used());
-    */
-
-    /*
-    //verifico el uso completo de bloques
-    char *aux1 = my_malloc(1);
-    char *aux2 = my_malloc(1);
-    char *aux3 = my_malloc(1);
-
-    printf("se espera que sea 13: %d \n", num_of_free_blocks());
-    printf("se espera que sea 3: %d \n", num_of_blocks_used());
-
-    for (int i = 0; i < BLOCK_SIZE * 3; i++){aux1[i] = 0;}//completo los 3 bloque con 0 
-
-    for (int i = 0; i < BLOCK_SIZE; i++){aux1[i] = -1;} //lleno a aux1 con -1
-
-    for (int i = 0; i < BLOCK_SIZE+5 ; i++){ //complero aux2 con -1 y me paso en 5
-        if (aux2[i] == -1)                   //si algun elemento de aux2 es -1 => error
-            printf("Error 1");
-        aux2[i] = -1;
-    }
-    int count = 0;
-    for (int i = 0; i < BLOCK_SIZE; i++){//verifico que solo haya 5 -1 en aux3
-        if (aux3[i] == -1)
-            count++;
-    }
-    printf("se espera que sea 5: %d \n", count);
-    */
-
-    //
-    char *aux1 = my_malloc(4);
-    if (aux1 == NULL)
-        printf("Error 1");
-    printf("se espera que sea 12: %d \n", num_of_free_blocks());
-    printf("se espera que sea 4: %d \n", num_of_blocks_used());
-
-    aux1 = my_malloc(2);
-    if (aux1 == NULL)
-        printf("Error 1");
-    printf("se espera que sea 10: %d \n", num_of_free_blocks());
-    printf("se espera que sea 6: %d \n", num_of_blocks_used());
-
-    aux1 = my_malloc(0);
-    if (aux1 == NULL)
-        printf("Error 1");
-    printf("se espera que sea 10: %d \n", num_of_free_blocks());
-    printf("se espera que sea 6: %d \n", num_of_blocks_used());
-
-    aux1 = my_malloc(7);
-    if (aux1 == NULL)
-        printf("Error 1");
-    printf("se espera que sea 3: %d \n", num_of_free_blocks());
-    printf("se espera que sea 13: %d \n", num_of_blocks_used());
-
-    aux1 = my_malloc(7);
-    printf("se espera que sea NULL: %p \n", aux1);
-    printf("se espera que sea 3: %d \n", num_of_free_blocks());
-    printf("se espera que sea 13: %d \n", num_of_blocks_used());
-
-    aux1 = my_malloc(3);
-    if (aux1 == NULL)
-        printf("Error 1");
-    printf("se espera que sea 0: %d \n", num_of_free_blocks());
-    printf("se espera que sea 16: %d \n", num_of_blocks_used());
-
-    aux1 = my_malloc(3);
-    printf("se espera que sea NULL: %p \n", aux1);
-    printf("se espera que sea 0: %d \n", num_of_free_blocks());
-    printf("se espera que sea 16: %d \n", num_of_blocks_used());
-
-    return 0;
+void MM_end(){
+    free(startMemory);
 }
