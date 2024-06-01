@@ -1,11 +1,13 @@
 /* 
-**  Basado en: https://mgarciaisaia.github.io/tutorial-c/blog/2014/12/26/un-tutorial-rapido-para-implementar-y-debuggear-malloc/
-**  Implemtacion del codigo del like, solo se remplazo la llamada al sistema sbrk por la funcion syscall que simula su 
-**  funcionamiento sin llamar al sistema y ademas se agregaron funciones de debbuger       
+** Basado en: https://mgarciaisaia.github.io/tutorial-c/blog/2014/12/26/un-tutorial-rapido-para-implementar-y-debuggear-malloc/
+** Se agregaron las siguientes mejoras:
+**   -> A la variable struct infoBlock se le agrego el puntero previous que apunta al bloque anterior
+**   -> findFreeBlock() no devuelve el primer bloque apto, sino que busaca entre todo los bloque libre y con tamaño suficiente el de menor tamaño (el mas apto)    
+**   -> Al liberar un bloque, my_free() ve si el bloque anterio y siguiente estan libre y si uno o ambos lo estan los une
 */
 #include "MemMang.h"
 
-//INFO_BLOCK_SIZE = 24 
+//INFO_BLOCK_SIZE = 32
 void *firstInfoBlock = NULL; 
 
 //solo visible para syscall
@@ -14,11 +16,13 @@ void *startMemory = NULL;
 void *currentMemoryLimit = NULL; 
 
 struct infoBlock{
-    size_t size; 
+    size_t size;
     int free;
     struct infoBlock *next;
+    struct infoBlock *previous;
 };
 typedef struct infoBlock *infoBlockPtr;
+
 
 //private:
 void *sysCall(size_t size);
@@ -44,28 +48,36 @@ void *my_malloc(size_t size){
             block = requestSpace(last, size);//agrego al final un nuevo bloque
             if(block == NULL)
                 return NULL;
-        }else{ // se encontro un boque
+        }else // se encontro un boque
             block->free = 0;
-        }
     }
     return (block + 1); //la direccion justo despues de infoBlock
 }
 
 /*----------------------------------------------------------------*/
-infoBlockPtr findFreeBlock(infoBlockPtr* last, size_t size){
+infoBlockPtr findFreeBlock(infoBlockPtr* last, size_t size){ 
     infoBlockPtr current = firstInfoBlock;
-    while (current != NULL && !(current->free && current->size >= size)){
+    infoBlockPtr aux = NULL;
+    size_t bestSize = SIZE_MAX;
+    while (current != NULL){ 
+        if(current->free && current->size >= size && current->size < bestSize){
+            if(current->size == size)
+                return current;
+            bestSize = current->size;
+            aux = current; 
+        }
         *last = current;
         current = current->next;
     }
+    if(aux != NULL)
+        return aux;
     return current;
 }
 
 /*----------------------------------------------------------------*/
-//agregar un nuevo bloque al final de la lista
 infoBlockPtr requestSpace(infoBlockPtr last, size_t size){
     infoBlockPtr block;
-    block = sysCall(0); //block = sbrk(0); 
+    block = sysCall(0);
     void* check = sysCall(size + INFO_BLOCK_SIZE);
     if(check == NULL) //no hay mas espacio en el heap
         return NULL;
@@ -74,14 +86,15 @@ infoBlockPtr requestSpace(infoBlockPtr last, size_t size){
         last->next = block;
     }
     block->size = size;
-    block->next = NULL;
     block->free = 0;
+    block->next = NULL;
+    block->previous = last;
 
     return block;
 }
 
 /*----------------------------------------------------------------*/
-infoBlockPtr getBlockPtr(void *ptr) { //direcciond de 
+infoBlockPtr getBlockPtr(void *ptr) {
     return (infoBlockPtr)ptr - 1;
 }
 
@@ -89,26 +102,61 @@ infoBlockPtr getBlockPtr(void *ptr) { //direcciond de
 void my_free(void *ptr){
     if (!ptr)
         return;
-    infoBlockPtr blockPtr = getBlockPtr(ptr);
-    blockPtr->free = 1;
+    infoBlockPtr current = getBlockPtr(ptr);
+    current->free = 1;
+    infoBlockPtr aux = current->next;
+    if(aux != NULL && aux->free){//el siguiente esta libre
+        current->size += aux->size+INFO_BLOCK_SIZE;
+        if(aux->next != NULL) 
+            aux->next->previous = current;
+        current->next = aux->next;
+        aux->next = NULL;
+        aux->previous = NULL;
+    }
+    aux = current->previous;
+    if(aux != NULL && aux->free){//el anterior esta libre
+        aux->size += current->size+INFO_BLOCK_SIZE; 
+        if(current->next != NULL)
+            current->next->previous = aux;
+        aux->next = current->next;
+        current->next = NULL;
+        current->previous = NULL;
+    }
+
+    return;
 }
 
-/*--------------------------------debugger------------------------------------
-  (*) bloque->next - bloque = bloque->size + INFO_BLOCK_SIZE 
-  (*) currentMemoryLimit - firstInfoBlock = a la suma de todos los size + INFO_BLOCK_SIZE * cantidad de bloques
+/*--------------------------------debugger--------------------------------------------------------------
+  (*) No puede haber dos free juntos 
+  (*) bloque->next-bloque = bloque->size+INFO_BLOCK_SIZE 
+  (*) memoryDim-firstInfoBlock = a la suma de todos los bloque->size+(INFO_BLOCK_SIZE*cantidad de bloques)
+  (*) current = current->next->previous 
   (*) firstInfoBlock = startMemory
 */
 int checkMemory(void){
     infoBlockPtr current = firstInfoBlock;
-    int blockIndex=0, cantFreeBlock = 0, numError = 0;
+    int blockIndex=0, freeFlag = 0, cantFreeBlock = 0, numError = 0;
     size_t totalSize = 0;
     printf("----------------START----------------\n");
     while (current != NULL){ 
+        if(current->free){
+            if(freeFlag){
+                printf("(*) Hay dos bloque libre juntos, el bloque:%d y bloque:%d\n",blockIndex-1, blockIndex);
+                numError++;
+            }else    
+                freeFlag = 1;
+            cantFreeBlock++;
+        }else
+            freeFlag=0;
         if(current->next != NULL){
             long diff = (long)current->next-(long)current;
             if(diff != (current->size+INFO_BLOCK_SIZE)){
                 int notUsed = diff - (current->size + INFO_BLOCK_SIZE);
                 printf("(*) Entre los bloque %d y %d hay %d bytes no usados\n",blockIndex, blockIndex+1, notUsed);
+                numError++;
+            }
+            if(current != current->next->previous){
+                printf("(*) En bloque %d; su puntero:%p  != %p :current->next->previous\n",blockIndex, current, current->next->previous);
                 numError++;
             }
         }
@@ -141,6 +189,7 @@ void printMemoryBLock(void){
         printf("  |-> size: %ld\n",current->size);
         printf("  |-> free: %s\n",(current->free == 0 ? "no" : "yes"));
         printf("  |-> next: %p\n",current->next);
+        printf("  |-> previous: %p\n",current->previous);
         printf("\n");
         if(current->free == 1)
             freeBlock++;
@@ -154,7 +203,7 @@ void printMemoryBLock(void){
     return;
 }
 void printAllMemory(void){
-    int cantElemPerLine = 10; //<----- para cambiar la cantidad de elementos en una linea 
+    int cantElemPerLine = 50; //<----- para cambiar la cantidad de elementos en una linea 
     infoBlockPtr current = firstInfoBlock;
     int numeberOfBlocks= 0;
     int freeBlock = 0;
@@ -164,8 +213,9 @@ void printAllMemory(void){
         printf("  |-> size: %ld\n",current->size);
         printf("  |-> free: %s\n",(current->free == 0 ? "no" : "yes"));
         printf("  |-> next: %p\n",current->next);
+        printf("  |-> previous: %p\n",current->previous);
         printf("  |-> datos guardados:");
-        char *aux = current+1; //NO CAMBIAR (char*)(current+1)
+        char *aux = current+1; //NO CAMBIAR A (char*)(current+1)
         for (int i = 0; i < current->size; i++){
             if(i%cantElemPerLine == 0){
                 printf("\n \t");
@@ -202,6 +252,7 @@ void *sysCall(size_t size){
 
     return NULL;
 }
+
 void MM_end(){
     free(startMemory);
 }
