@@ -1,21 +1,64 @@
-# Memory Allocation Manager (MAM)
+# MemManager
 
-Memory Allocation Manager (MAM) es una implementación personalizada del gestor de memoria dinámico en C. Este proyecto incluye varias versiones del código, cada una mejorando y ampliando la anterior.
+MemManager is a custom implementation of a memory manager that provides an alternative to the standard `malloc`, `realloc`, `free`, and `calloc` functions in C. This library is designed for educational purposes and to demonstrate memory management concepts.
 
-## Descripción
+## Features
 
-El objetivo de MAM es proporcionar una alternativa ligera y eficiente a las funciones estándar de gestión de memoria como `malloc`, `free`, `calloc` y `realloc`.
+- Custom `malloc` implementation
+- Custom `realloc` implementation
+- Custom `free` implementation
+- Custom `calloc` implementation
+- Memory block splitting and coalescing
+- Simple debugging utilities
 
-### Características
+## Getting Started
 
-- **malloc**: Asignación de memoria dinámica.
-- **free**: Liberación de memoria asignada.
-- **calloc**: Asignación de memoria inicializada a cero.
-- **realloc**: Redimensionamiento de bloques de memoria existentes.
+### Prerequisites
 
-## Uso
+- GCC or any C compiler
 
-Para compilar y usar MAM en tu proyecto, incluye el archivo `mam.c` y compílalo junto con tu código:
+### Building the Library
+
+To build the library, navigate to the root directory and run:
 
 ```sh
-gcc -o myprogram myprogram.c mam.c
+make
+```
+
+### Running Tests
+
+To build and run the tests, navigate to the `tests` directory and run:
+
+```sh
+make
+./test_MemMang
+```
+
+### Running Examples
+
+To build and run the example program, navigate to the `examples` directory and run:
+
+```sh
+make
+./example
+```
+
+## Usage
+
+Include the header file in your project:
+
+```c
+#include "MemMang.h"
+```
+
+Then, use the custom memory management functions as you would use the standard ones:
+
+```c
+void *ptr = my_malloc(100);
+ptr = my_realloc(ptr, 200);
+my_free(ptr);
+```
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
