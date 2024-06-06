@@ -1,13 +1,5 @@
-/*
-Basado en:
-https://mgarciaisaia.github.io/tutorial-c/blog/2014/12/26/un-tutorial-rapido-para-implementar-y-debuggear-malloc/
 
-Se agregaron las siguientes mejoras:
- - Se modularizó la union de bloques libres en la función joinNextBlock y joinPreviousBlock.
- - Se agregó la función my_realloc, que reasigna memoria, intentando expandir el bloque actual si hay espacio.
- - Se reformatearon y reorganizaron varias partes del código para mejorar la legibilidad.
-*/
-#include "MemMang.h"
+#include "../include/MemMang.h"
 
 
 // INFO_BLOCK_SIZE = 32 bytes
